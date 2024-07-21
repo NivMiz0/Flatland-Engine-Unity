@@ -1,0 +1,162 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+//Canvas Vars
+RWTexture2D<float4> Result;
+float Width;
+float Height;
+float RenderedHeight;
+float4 EmptyCanvasColor;
+
+//Camera Vars
+float FOVAngle; 
+float4 BackgroundColor;
+float FogDensity;
+float4 FogColor;
+
+float3 POS;
+float3 FWD;
+float3 RIT;
+
+//Ray Marching Vars
+float MaxSteps;
+
+//Shapes Vars
+struct Shape
+{
+    float3 position;
+    int shapeType;
+    float2 scale;
+    float4 color;
+};
+StructuredBuffer<Shape> SceneShapes;
+int NumSceneShapes;
+
+//Shape SDFs
+float SdfCircle(float3 p, float3 center, float radius)
+{
+    return distance(p, center) - radius;
+}
+
+float SdfBox(float3 p, float3 center, float width, float height)
+{
+    float3 local = p - center;
+    float3 d = abs(local)-float3(width/2.0,0, height/2.0);
+    return length(max(d,0.0)) + min(max(d.x,d.z),0.0);
+}
+
+float SdfEquilateralTriangle(float3 p, float3 center, float3 radius)
+{
+    const float k = sqrt(3.0);
+    float3 local = p - center;
+
+    local.x = abs(local.x) - radius;
+    local.z = local.z + radius/k;
+    if( local.x+k*local.z>0.0 ) local = float3(local.x-k*local.z,0,-k*local.x-local.z)/2.0;
+    local.x -= clamp( local.x, -2.0*radius, 0.0 );
+    return -length(local)*sign(local.z);
+}
+
+float roundToDecimal(float value, int decimalPlaces)
+{
+    float factor = pow(10.0f, decimalPlaces);
+    return round(value * factor) / factor;
+}
+
+//Ray marching Methods
+
+//Returns the distance to a given shape from a point.
+float GetShapeDistance(Shape shape, float3 p)
+{
+    switch (shape.shapeType)
+    {
+        case 0:
+            return SdfCircle(p, shape.position, shape.scale.x);
+        case 1:
+            return SdfBox(p, shape.position, shape.scale.x, shape.scale.y);
+        case 2:
+            return SdfEquilateralTriangle(p, shape.position, shape.scale.x);
+    }
+    return 0;
+}
+
+// Returns the distance to the closest shape in the scene from a point. Also outputs that shape
+float GetClosestShapeDistance(float3 p, out Shape shape)
+{
+    float minDist = 1000;
+    Shape closest = SceneShapes[0];
+
+    for(int i=0; i<NumSceneShapes; i++)
+    {
+        float dist = GetShapeDistance(SceneShapes[i], p); 
+        if(dist < 0.01)
+        {
+            //for breaking out of the shape check loop early if we're st the edge of a shape
+            shape = SceneShapes[i];
+            return dist;
+        }
+        if(dist < minDist)
+        {
+            minDist = dist;
+            closest = SceneShapes[i];
+        }
+    }   
+
+    shape = closest;
+    return minDist;
+}
+
+//Shoot a ray, step along its path using circle-assisted ray marching (each step along the ray is equal to 
+//the distance between the current point and the closest shape), and if the step length 
+//(the distance to the closest shape) is nearly zero return the color of the closest shape 
+//(with which we intersected), interpolated with some fog color based on its distance from the camera.
+float4 ShootRay(float3 origin, float3 direction)
+{
+    float3 prevPoint = origin;
+    float step = 0;
+    for(int i = 0; i < MaxSteps; i++)
+    {
+        float3 curPoint = prevPoint + direction * step;
+        Shape s;
+        step = GetClosestShapeDistance(curPoint, s);
+        if(step < 0.05) 
+        {
+            //return lerp(s.color, FogColor, roundToDecimal(clamp(FogDensity*distance(curPoint, POS), 0.0, 1.0), 1));
+            return lerp(s.color, FogColor, clamp(FogDensity*distance(curPoint, POS), 0.0, 1.0));
+        }
+        //Old code - misses corners sometimes because of fixed step length
+        /*
+        float3 curPoint = origin + direction * StepLength * i;
+        for(int j=0; j<NumSceneShapes; j++)
+        {
+            if(GetShapeDistance(SceneShapes[j], curPoint) < 0.0)
+            {
+                return lerp(SceneShapes[j].color, FogColor, clamp(FogDensity*i, 0.0, 1.0)); 
+            }
+        }*/
+
+        prevPoint = curPoint;
+    }
+    return BackgroundColor;
+}
+
+[numthreads(128,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{     
+    if(id.y > Height/2 + RenderedHeight || id.y < Height/2 - RenderedHeight)
+    {
+        Result[id.xy] = EmptyCanvasColor;
+    }
+    else
+    {  
+        // if x value is equal to "current ray", render according to that ray's output
+        // TODO: Optimize this. Each pixel in every column (x value) is in fact doing the same calculatiom, when only one pixel from each of those colunms needs to do them
+
+        //find direction for ray based on x value in relation to wdith of screen, use id.x like you use i in the c# version
+        float curAngle = id.x * FOVAngle/Width - FOVAngle/2;
+        float3 ray = normalize(FWD + RIT * degrees(tan(radians(curAngle/90.0))));
+
+        Result[id.xy] = ShootRay(POS, ray);
+    }
+}
+

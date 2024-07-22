@@ -8,6 +8,7 @@ public class FlatCameraCompute : MonoBehaviour
 {
 	[Header("Canvas")]
 	[SerializeField] ComputeShader computeShader;
+	[Tooltip("The height of the display canvas. Display remains 1D even if the height is increased.")]
 	[SerializeField] int height;
 	[SerializeField] Color emptyCanvasColor;
 	RenderTexture renderTexture;
@@ -22,6 +23,7 @@ public class FlatCameraCompute : MonoBehaviour
 
 	[Header("Ray Marching")]
 
+	[Tooltip("The desired number of rays to cast from the camera - meaning the desired horizontal tresolution of the screen. Should be a multiple of 128. ")]
 	[SerializeField] int numRays;
 	[SerializeField] float maxSteps;
 

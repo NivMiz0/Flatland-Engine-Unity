@@ -1,4 +1,0 @@
-repository "FlatlandEngine@NivMizzer@cloud"
-  path "/"
-    br "/main"
-    co "/main"
